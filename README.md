@@ -7,7 +7,7 @@
 
 Espresso is a native macOS menu bar app that keeps your Mac awake for a chosen amount of time.
 
-It is intentionally small: choose 15 minutes, 30 minutes, 1 hour, 5 hours, 8 hours, or indefinitely from the menu bar. Espresso keeps the display awake, which also prevents idle system sleep, until the timer ends or you stop it.
+It is intentionally small: choose 15 minutes, 30 minutes, 1 hour, 2 hours, 3 hours, 4 hours, 5 hours, 8 hours, 12 hours, or indefinitely from the menu bar. Espresso keeps the display awake, which also prevents idle system sleep, until the timer ends or you stop it.
 
 Espresso is local-only. It has no cloud service, no telemetry, no updater, and no external credentials.
 

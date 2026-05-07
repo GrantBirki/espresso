@@ -9,8 +9,12 @@ Espresso lives in the macOS menu bar.
    - 15 minutes
    - 30 minutes
    - 1 hour
+   - 2 hours
+   - 3 hours
+   - 4 hours
    - 5 hours
    - 8 hours
+   - 12 hours
    - Indefinitely
 
 Espresso immediately starts a macOS power assertion. While the assertion is active, macOS should not dim the display due to idle time, and the Mac should not enter idle system sleep.
