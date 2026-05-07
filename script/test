@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source script/env "$@"
+source "$DIR/script/lib/common.sh"
+
+require_macos error "Tests require macOS."
+ensure_full_xcode
+require_tool xcodebuild "xcodebuild not found. Install Xcode or Command Line Tools."
+
+script/update
+
+PROJECT_PATH=$(find_project)
+set_xcodebuild_vars
+
+echo -e "${BLUE}Testing ${SCHEME} (${CONFIGURATION})...${OFF}"
+
+xcodebuild \
+  -project "$PROJECT_PATH" \
+  -scheme "$SCHEME" \
+  -configuration "$CONFIGURATION" \
+  -derivedDataPath "$DERIVED_DATA" \
+  -destination "platform=macOS" \
+  test \
+  CODE_SIGNING_ALLOWED=NO \
+  ENABLE_CODE_COVERAGE="${ENABLE_CODE_COVERAGE:-NO}" \
+  CLANG_COVERAGE_MAPPING="${CLANG_COVERAGE_MAPPING:-NO}" \
+  MARKETING_VERSION="$VERSION" \
+  CURRENT_PROJECT_VERSION="$VERSION" \
+  GIT_SHA="$GIT_SHA"

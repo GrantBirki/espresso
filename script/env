@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# COLORS
+export OFF='\033[0m'
+export RED='\033[0;31m'
+export GREEN='\033[0;32m'
+export BLUE='\033[0;34m'
+export PURPLE='\033[0;35m'
+export YELLOW='\033[0;33m'
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && cd .. && pwd )"
+export DIR
+
+REPO_NAME=$(basename "$PWD")
+export REPO_NAME
+
+VERSION_FILE="$DIR/VERSION"
+if [[ -f "$VERSION_FILE" ]]; then
+  VERSION=$(awk 'NF && $1 !~ /^#/ {print $1; exit}' "$VERSION_FILE")
+fi
+
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="unknown"
+fi
+
+export VERSION
+
+if [[ -z "${GIT_SHA:-}" ]]; then
+  if command -v git >/dev/null 2>&1 && [[ -d "$DIR/.git" ]]; then
+    GIT_SHA=$(git -C "$DIR" rev-parse --short=8 HEAD 2>/dev/null || true)
+  fi
+fi
+
+if [[ -z "${GIT_SHA:-}" ]]; then
+  GIT_SHA="unknown"
+fi
+
+export GIT_SHA

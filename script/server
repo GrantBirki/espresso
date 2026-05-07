@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source script/env "$@"
+source "$DIR/script/lib/common.sh"
+
+require_macos error "Launch requires macOS."
+
+script/build
+
+APP_NAME="${APP_NAME:-Espresso}"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+DERIVED_DATA="${DERIVED_DATA:-$DIR/build/DerivedData}"
+APP_PATH="$DERIVED_DATA/Build/Products/$CONFIGURATION/$APP_NAME.app"
+APP_EXEC="$APP_PATH/Contents/MacOS/$APP_NAME"
+BUNDLE_ID_DEFAULT="io.birki.espresso"
+if [[ "$CONFIGURATION" == "Debug" ]]; then
+  BUNDLE_ID_DEFAULT="io.birki.espresso.dev"
+fi
+BUNDLE_ID="${BUNDLE_ID:-$BUNDLE_ID_DEFAULT}"
+
+if pgrep -f "$APP_EXEC" >/dev/null 2>&1; then
+  echo -e "${BLUE}Quitting existing ${APP_NAME}...${OFF}"
+  osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+  sleep 0.5
+  pkill -f "$APP_EXEC" >/dev/null 2>&1 || true
+fi
+
+if [[ ! -d "$APP_PATH" ]]; then
+  echo -e "${RED}App not found at ${APP_PATH}.${OFF}"
+  exit 1
+fi
+
+require_tool codesign "codesign not found."
+echo -e "${BLUE}Ad-hoc signing ${APP_NAME}.app for local launch...${OFF}"
+codesign --force --deep --sign - "$APP_PATH"
+codesign --verify --strict "$APP_PATH"
+
+touch "$APP_PATH"
+
+echo "Debug app bundle:"
+echo "$APP_PATH"
+echo "Bundle identifier:"
+echo "$BUNDLE_ID"
+echo "Tip: you can stream logs with:"
+echo "log stream --predicate 'process == \"Espresso\"' --style compact"
+echo "Or you can use:"
+echo "log stream --level debug --predicate 'subsystem == \"io.birki.espresso\"'"
+echo -e "${GREEN}Launching ${APP_NAME}...${OFF}"
+open "$APP_PATH"

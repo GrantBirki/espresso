@@ -1,0 +1,11 @@
+excluded:
+  - .build
+  - .tmp
+  - build
+  - DerivedData
+  - Espresso.xcodeproj
+
+disabled_rules:
+  - function_parameter_count
+  - opening_brace
+  - trailing_comma
