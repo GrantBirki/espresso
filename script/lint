@@ -4,6 +4,8 @@ set -euo pipefail
 source script/env "$@"
 source "$DIR/script/lib/common.sh"
 
+"$DIR/script/ci-policy"
+
 require_macos skip "Skipping lint on non-macOS host."
 ensure_full_xcode
 require_tool swiftlint "swiftlint not found. Run script/bootstrap."

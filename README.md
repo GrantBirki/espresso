@@ -58,19 +58,16 @@ You can also verify the checksum:
 shasum -a 256 Espresso.zip
 ```
 
-## Unsigned Builds
+## Current v0.1.x Release
 
-Espresso releases are currently unsigned. macOS Gatekeeper may block the first launch.
+Espresso v0.1.x releases are unsigned. macOS Gatekeeper may block the first launch. The planned v0.2.0 release will be signed and notarized with an Apple Developer ID certificate.
 
 To open it:
 
 1. Right-click `Espresso.app` and choose Open.
 2. Or go to System Settings -> Privacy & Security and click Open Anyway.
-3. If neither shows, remove the quarantine attribute:
 
-```bash
-xattr -dr com.apple.quarantine /Applications/Espresso.app
-```
+Do not clear the app's quarantine attribute; use macOS's explicit approval flow instead.
 
 ## Contributing
 

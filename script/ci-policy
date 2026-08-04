@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+WORKFLOW_DIR="$ROOT_DIR/.github/workflows"
+RELEASE_WORKFLOW="$WORKFLOW_DIR/release.yml"
+FENCE_SHA="e6b39c80c51cb2b2a39448ddeff74b3b886c0a63"
+
+fail() {
+  echo "GitHub Actions policy: $1" >&2
+  exit 1
+}
+
+require() {
+  grep -Fq -- "$1" <<< "$2" || fail "$3"
+}
+
+forbid() {
+  ! grep -Fq -- "$1" <<< "$2" || fail "$3"
+}
+
+job_block() {
+  awk -v header="  $1:" '
+    $0 == header { found = 1 }
+    found && /^  [A-Za-z0-9_-]+:$/ && $0 != header { exit }
+    found { print }
+    END { if (!found) exit 1 }
+  ' "$RELEASE_WORKFLOW"
+}
+
+step_block() {
+  awk -v header="      - name: $1" '
+    $0 == header { found = 1 }
+    found && /^      - name:/ && $0 != header { exit }
+    found { print }
+    END { if (!found) exit 1 }
+  ' <<< "$2"
+}
+
+validate_checkouts() {
+  local path
+  for path in "$WORKFLOW_DIR"/*.yml "$WORKFLOW_DIR"/*.yaml; do
+    [[ -e "$path" ]] || continue
+    awk -v path="${path#"$ROOT_DIR/"}" '
+      /^      - name:/ && checkout && !safe { print path ": checkout must disable persisted credentials" > "/dev/stderr"; exit 1 }
+      /^      - name:/ { checkout = safe = 0 }
+      /uses: actions\/checkout@/ { checkout = 1 }
+      checkout && /persist-credentials:[[:space:]]*false/ { safe = 1 }
+      END { if (checkout && !safe) { print path ": checkout must disable persisted credentials" > "/dev/stderr"; exit 1 } }
+    ' "$path" || fail "unsafe checkout configuration"
+  done
+}
+
+workflow_text=$(find "$WORKFLOW_DIR" -type f \( -name '*.yml' -o -name '*.yaml' \) -exec sed -n '1,$p' {} +)
+release_text=$(<"$RELEASE_WORKFLOW")
+project_text=$(<"$ROOT_DIR/project.yml")
+package_text=$(<"$ROOT_DIR/script/package")
+verify_text=$(<"$ROOT_DIR/script/verify-package")
+
+forbid "pull_request_target:" "$workflow_text" "pull_request_target is prohibited"
+forbid "softprops/action-gh-release" "$workflow_text" "release publication must use GitHub CLI"
+forbid "actions/attest-build-provenance" "$workflow_text" "attestation must apply to the final signed artifact"
+
+while IFS= read -r line; do
+  use=${line#*:}
+  use=${use%%#*}
+  use=$(printf '%s' "$use" | tr -d "[:space:]\"'")
+  [[ "$use" == ./* ]] && continue
+  action=${use%%@*}
+  case "$action" in
+    actions/checkout|actions/upload-artifact|actions/download-artifact|actions/attest|openai/fence) ;;
+    *) fail "action is not allowlisted: $action" ;;
+  esac
+  [[ "$use" =~ @[0-9a-f]{40}$ ]] || fail "action is not pinned to a full commit: $use"
+done < <(grep -R -h -E '^[[:space:]]*(-[[:space:]]+)?uses[[:space:]]*:' "$WORKFLOW_DIR")
+
+validate_checkouts
+
+require "      - main" "$release_text" "release workflow must target main"
+require '      - "VERSION"' "$release_text" "release workflow must trigger on VERSION"
+require "github.event_name == 'push'" "$release_text" "release workflow must require a push"
+require "github.ref == 'refs/heads/main'" "$release_text" "release workflow must require main"
+require "github.workflow_sha == github.sha" "$release_text" "release workflow must use its trusted definition"
+forbid "workflow_dispatch:" "$release_text" "manual release dispatch is prohibited"
+[[ $(grep -c 'actions/checkout@' "$RELEASE_WORKFLOW") == 1 ]] || fail "release workflow must have exactly one checkout"
+require 'ref: ${{ github.sha }}' "$release_text" "release checkout must use the event commit"
+require "fetch-depth: 1" "$release_text" "release checkout must be shallow"
+
+require "ENABLE_HARDENED_RUNTIME: YES" "$project_text" "hardened runtime must be explicit"
+require "ARCHS: arm64" "$project_text" "release builds must target arm64"
+forbid "x86_64" "$project_text$package_text$verify_text$release_text" "release paths must not target x86_64"
+forbid "CODE_SIGN_ENTITLEMENTS" "$project_text" "Espresso must not declare entitlements"
+forbid '--entitlements' "$package_text" "Espresso must not sign with entitlements"
+require '!= "{}"' "$verify_text" "package verification must require exactly empty entitlements"
+
+build_job=$(job_block build) || fail "build job is missing"
+sign_job=$(job_block sign) || fail "sign job is missing"
+attest_job=$(job_block attest) || fail "attest job is missing"
+verify_job=$(job_block verify) || fail "verify job is missing"
+release_job=$(job_block release) || fail "release job is missing"
+signing_step=$(step_block "sign + notarize" "$sign_job") || fail "signing step is missing"
+
+require "    needs: build" "$sign_job" "sign must depend on build"
+require "    environment: release" "$sign_job" "sign must use the release environment"
+require "    permissions: {}" "$sign_job" "sign must not receive a GitHub token"
+require "    needs: [build, sign]" "$attest_job" "attest must explicitly depend on build and sign"
+require "    needs: [build, sign, attest]" "$verify_job" "verify must explicitly depend on prior jobs"
+require "    needs: [build, sign, attest, verify]" "$release_job" "release must explicitly depend on prior jobs"
+forbid "actions/checkout@" "$sign_job" "sign must not check out repository code"
+forbid "run: script/" "$sign_job" "sign must not run repository scripts"
+
+verify_line=$(grep -nF '      - name: verify unnotarized artifact' "$RELEASE_WORKFLOW" | cut -d: -f1)
+sign_line=$(grep -nF '      - name: sign + notarize' "$RELEASE_WORKFLOW" | cut -d: -f1)
+[[ "$verify_line" -lt "$sign_line" ]] || fail "artifact verification must precede secret exposure"
+
+for reference in \
+  'APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}' \
+  'APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}' \
+  'APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}' \
+  'APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}' \
+  'APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}' \
+  'APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}'; do
+  [[ $(grep -Fc "$reference" "$RELEASE_WORKFLOW") == 1 ]] || fail "$reference must appear exactly once"
+  require "$reference" "$signing_step" "$reference must be scoped to the signing step"
+done
+
+[[ $(grep -c 'id-token: write' "$RELEASE_WORKFLOW") == 1 ]] || fail "OIDC write permission must be isolated"
+[[ $(grep -c 'contents: write' "$RELEASE_WORKFLOW") == 1 ]] || fail "release write permission must be isolated"
+[[ $(grep -c 'environment: release' "$RELEASE_WORKFLOW") == 1 ]] || fail "only sign may use the release environment"
+[[ $(grep -c 'environment: publish' "$RELEASE_WORKFLOW") == 2 ]] || fail "only attest and release may use publish"
+
+for job in attest verify release; do
+  block=$(job_block "$job")
+  first_step=$(awk '/^    steps:$/ { steps = 1; next } steps && /^      - / { print; exit }' <<< "$block")
+  [[ "$first_step" == "      - name: fence" ]] || fail "Fence must be the first $job step"
+  require "uses: openai/fence@$FENCE_SHA" "$block" "Fence pin changed in $job"
+  require "mode: audit" "$block" "Fence must remain in audit mode until a real release is observed"
+done
+[[ $(grep -c 'openai/fence@' "$RELEASE_WORKFLOW") == 3 ]] || fail "Fence must protect attest, verify, and release"
+
+forbid "xattr" "$release_text" "release workflow must preserve quarantine"
+require "gh attestation verify" "$verify_job" "verify must validate provenance"
+require "--bundle" "$verify_job" "attestation verification must use the downloaded bundle"
+
+echo "GitHub Actions policy: OK"
