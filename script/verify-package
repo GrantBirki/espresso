@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source script/env "$@"
+source "$DIR/script/lib/common.sh"
+
+require_macos error "Package verification requires macOS."
+for tool in codesign ditto lipo plutil shasum; do
+  require_tool "$tool" "$tool not found."
+done
+
+APP_NAME="${APP_NAME:-Espresso}"
+ZIP_PATH="${1:-$DIR/dist/${APP_NAME}.zip}"
+CHECKSUM_PATH="${CHECKSUM_PATH:-${ZIP_PATH}.sha256}"
+EXPECTED_VERSION="${EXPECTED_VERSION:-$VERSION}"
+EXPECTED_GIT_SHA="${EXPECTED_GIT_SHA:-$GIT_SHA}"
+
+if [[ ! -f "$ZIP_PATH" || ! -f "$CHECKSUM_PATH" ]]; then
+  echo -e "${RED}Package or checksum is missing.${OFF}"
+  exit 1
+fi
+if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo -e "${RED}Expected version must use X.Y.Z format.${OFF}"
+  exit 1
+fi
+
+expected_sha=$(awk 'NF {print $1; exit}' "$CHECKSUM_PATH")
+actual_sha=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
+if [[ ! "$expected_sha" =~ ^[0-9a-fA-F]{64}$ || "$actual_sha" != "$expected_sha" ]]; then
+  echo -e "${RED}Package checksum is invalid.${OFF}"
+  exit 1
+fi
+
+VERIFY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/espresso-package.XXXXXX")
+trap 'rm -rf "$VERIFY_DIR"' EXIT
+ditto -x -k "$ZIP_PATH" "$VERIFY_DIR"
+
+APP_PATH="$VERIFY_DIR/${APP_NAME}.app"
+top_level_count=$(find "$VERIFY_DIR" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')
+if [[ "$top_level_count" != "1" || ! -d "$APP_PATH" ]]; then
+  echo -e "${RED}Package must contain exactly one top-level ${APP_NAME}.app bundle.${OFF}"
+  exit 1
+fi
+
+codesign --verify --deep --strict "$APP_PATH"
+signature_details=$(codesign -d --verbose=4 "$APP_PATH" 2>&1)
+if [[ "$signature_details" != *"flags="*"runtime"* ]]; then
+  echo -e "${RED}Application signature must enable the hardened runtime.${OFF}"
+  exit 1
+fi
+
+ENTITLEMENTS_PATH="$VERIFY_DIR/entitlements.plist"
+if ! codesign -d --entitlements :- "$APP_PATH" > "$ENTITLEMENTS_PATH" 2>/dev/null; then
+  echo -e "${RED}Unable to read application entitlements.${OFF}"
+  exit 1
+fi
+if [[ -s "$ENTITLEMENTS_PATH" ]] && [[ "$(plutil -convert json -o - "$ENTITLEMENTS_PATH" 2>/dev/null)" != "{}" ]]; then
+  echo -e "${RED}Release application contains unexpected entitlements.${OFF}"
+  exit 1
+fi
+
+PLIST_PATH="$APP_PATH/Contents/Info.plist"
+EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/$APP_NAME"
+if [[ ! -f "$PLIST_PATH" || ! -x "$EXECUTABLE_PATH" ]]; then
+  echo -e "${RED}Application metadata or executable is missing.${OFF}"
+  exit 1
+fi
+
+architectures=$(lipo -archs "$EXECUTABLE_PATH")
+if [[ "$architectures" != "arm64" ]]; then
+  echo -e "${RED}Expected exactly arm64; found: ${architectures:-none}.${OFF}"
+  exit 1
+fi
+
+plist_value() {
+  plutil -extract "$1" raw -o - "$PLIST_PATH" 2>/dev/null || true
+}
+
+bundle_identifier=$(plist_value CFBundleIdentifier)
+short_version=$(plist_value CFBundleShortVersionString)
+build_version=$(plist_value CFBundleVersion)
+minimum_system=$(plist_value LSMinimumSystemVersion)
+ui_element=$(plist_value LSUIElement)
+icon_name=$(plist_value CFBundleIconName)
+git_sha=$(plist_value GIT_SHA)
+
+if [[ "$bundle_identifier" != "io.birki.espresso" ]]; then
+  echo -e "${RED}Unexpected bundle identifier: ${bundle_identifier:-missing}.${OFF}"
+  exit 1
+fi
+if [[ "$short_version" != "$EXPECTED_VERSION" || "$build_version" != "$EXPECTED_VERSION" ]]; then
+  echo -e "${RED}Bundle version does not match $EXPECTED_VERSION.${OFF}"
+  exit 1
+fi
+if [[ "$git_sha" != "$EXPECTED_GIT_SHA" ]]; then
+  echo -e "${RED}Bundle commit does not match $EXPECTED_GIT_SHA.${OFF}"
+  exit 1
+fi
+if [[ "$minimum_system" != "26.0" || "$ui_element" != "true" ]]; then
+  echo -e "${RED}Unexpected deployment target or LSUIElement value.${OFF}"
+  exit 1
+fi
+if [[ "$icon_name" != "AppIcon" || ! -f "$APP_PATH/Contents/Resources/AppIcon.icns" || ! -f "$APP_PATH/Contents/Resources/Assets.car" ]]; then
+  echo -e "${RED}Compiled app icon assets are missing or misconfigured.${OFF}"
+  exit 1
+fi
+
+echo -e "${GREEN}✅ Package verification complete.${OFF}"
+echo "Version: $EXPECTED_VERSION"
+echo "Architectures: $architectures"
+echo "SHA256: $actual_sha"
