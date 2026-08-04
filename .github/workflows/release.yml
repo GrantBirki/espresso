@@ -419,7 +419,6 @@ jobs:
         uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
         with:
           mode: audit
-          allow_github_artifacts: true
           allowlist: |
             fulcio.sigstore.dev
             rekor.sigstore.dev
@@ -456,7 +455,6 @@ jobs:
         uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
         with:
           mode: audit
-          allow_github_artifacts: true
           allowlist: |
             tuf-repo-cdn.sigstore.dev
             tuf-repo.github.com
@@ -522,7 +520,6 @@ jobs:
         uses: openai/fence@e6b39c80c51cb2b2a39448ddeff74b3b886c0a63 # pin@v0.10.0
         with:
           mode: audit
-          allow_github_artifacts: true
           allowlist: |
             uploads.github.com
 
