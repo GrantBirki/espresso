@@ -4,7 +4,9 @@ Espresso keeps settings intentionally small.
 
 ## Launch at Login
 
-When enabled, Espresso registers itself with macOS using `SMAppService.mainApp`. macOS may require approval from System Settings.
+When enabled, Espresso registers itself with macOS using `SMAppService.mainApp`. macOS may require approval from System Settings; Espresso shows a reminder while approval is pending. The switch stays on for a registered item awaiting approval.
+
+Espresso checks the macOS registration status after each change and when Settings opens. If a change fails, the switch and saved setting reflect the registration that remains in macOS, and Espresso shows an error so you can retry.
 
 ## Session Persistence
 

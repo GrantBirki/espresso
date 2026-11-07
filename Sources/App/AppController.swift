@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Foundation
 
 @MainActor
@@ -9,8 +8,6 @@ final class AppController {
     private let menuBarController: MenuBarController
     private let settingsWindowController: SettingsWindowController
     private let aboutWindowController = AboutWindowController()
-    private let launchAtLoginManager = LaunchAtLoginManager()
-    private var cancellables = Set<AnyCancellable>()
 
     init(espressoController: EspressoController = EspressoController()) {
         settings = SettingsStore()
@@ -43,8 +40,7 @@ final class AppController {
     func start() {
         AppLog.app.info("Espresso AppController start")
         menuBarController.start()
-        observeSettings()
-        launchAtLoginManager.setEnabled(settings.autoLaunchEnabled)
+        settings.synchronizeLaunchAtLogin()
         updateVisibleState()
     }
 
@@ -53,16 +49,9 @@ final class AppController {
     }
 
     func showSettings() {
+        settings.refreshLaunchAtLoginStatus()
         updateVisibleState()
         settingsWindowController.show()
-    }
-
-    private func observeSettings() {
-        settings.$autoLaunchEnabled
-            .sink { [weak self] enabled in
-                self?.launchAtLoginManager.setEnabled(enabled)
-            }
-            .store(in: &cancellables)
     }
 
     private func updateVisibleState() {

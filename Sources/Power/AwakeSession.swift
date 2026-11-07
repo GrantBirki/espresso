@@ -2,29 +2,29 @@ import Foundation
 
 struct AwakeSession: Equatable {
     let duration: AwakeDuration
-    let startDate: Date
+    let startUptime: TimeInterval
 
-    var endDate: Date? {
+    var endUptime: TimeInterval? {
         guard let seconds = duration.seconds else { return nil }
-        return startDate.addingTimeInterval(seconds)
+        return startUptime + seconds
     }
 
-    func isActive(at date: Date) -> Bool {
-        !isExpired(at: date)
+    func isActive(at uptime: TimeInterval) -> Bool {
+        !isExpired(at: uptime)
     }
 
-    func isExpired(at date: Date) -> Bool {
-        guard let endDate else { return false }
-        return date >= endDate
+    func isExpired(at uptime: TimeInterval) -> Bool {
+        guard let endUptime else { return false }
+        return uptime >= endUptime
     }
 
-    func remainingTime(at date: Date) -> TimeInterval? {
-        guard let endDate else { return nil }
-        return max(0, endDate.timeIntervalSince(date))
+    func remainingTime(at uptime: TimeInterval) -> TimeInterval? {
+        guard let endUptime else { return nil }
+        return max(0, endUptime - uptime)
     }
 
-    func remainingLabel(at date: Date) -> String {
-        guard let remaining = remainingTime(at: date) else {
+    func remainingLabel(at uptime: TimeInterval) -> String {
+        guard let remaining = remainingTime(at: uptime) else {
             return "Indefinitely"
         }
 

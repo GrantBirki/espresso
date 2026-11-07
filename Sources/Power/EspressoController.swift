@@ -4,6 +4,7 @@ import Foundation
 final class EspressoController {
     private let assertionClient: SleepAssertionClient
     private let now: () -> Date
+    private let uptime: () -> TimeInterval
     private var assertionID: SleepAssertionIdentifier?
     private var expiryTimer: Timer?
     private var refreshTimer: Timer?
@@ -14,10 +15,12 @@ final class EspressoController {
 
     init(
         assertionClient: SleepAssertionClient = IOKitSleepAssertionClient(),
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.assertionClient = assertionClient
         self.now = now
+        self.uptime = uptime
     }
 
     func start(duration: AwakeDuration) {
@@ -27,7 +30,7 @@ final class EspressoController {
         switch assertionClient.createAssertion(duration: duration) {
         case let .success(assertion):
             assertionID = assertion
-            session = AwakeSession(duration: duration, startDate: now())
+            session = AwakeSession(duration: duration, startUptime: uptime())
             lastError = nil
             scheduleTimers()
             AppLog.power.info("Espresso started for \(duration.menuTitle, privacy: .public)")
@@ -49,9 +52,8 @@ final class EspressoController {
         onStateChange?()
     }
 
-    func expireIfNeeded(at date: Date? = nil) {
-        let comparisonDate = date ?? now()
-        guard let session, session.isExpired(at: comparisonDate) else {
+    func expireIfNeeded(at comparisonUptime: TimeInterval? = nil) {
+        guard let session, session.isExpired(at: comparisonUptime ?? uptime()) else {
             return
         }
         stop()
@@ -61,7 +63,8 @@ final class EspressoController {
         MenuBarState(
             session: session,
             errorMessage: lastError?.userMessage,
-            now: date ?? now()
+            now: date ?? now(),
+            uptime: uptime()
         )
     }
 
@@ -82,20 +85,23 @@ final class EspressoController {
     private func scheduleTimers() {
         guard let session else { return }
 
-        if let endDate = session.endDate {
-            let interval = max(0.1, endDate.timeIntervalSince(now()))
-            expiryTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-                Task { @MainActor in
+        if let remaining = session.remainingTime(at: uptime()) {
+            let timer = Timer(timeInterval: max(0.1, remaining), repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
                     self?.expireIfNeeded()
                 }
             }
+            expiryTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
         }
 
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
                 self?.expireIfNeeded()
                 self?.onStateChange?()
             }
         }
+        refreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 }
