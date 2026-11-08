@@ -5,9 +5,10 @@ struct MenuBarState: Equatable {
     var session: AwakeSession?
     var errorMessage: String?
     var now: Date
+    var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 
     var isActive: Bool {
-        session?.isActive(at: now) ?? false
+        session?.isActive(at: uptime) ?? false
     }
 
     var selectedDuration: AwakeDuration? {
@@ -19,20 +20,21 @@ struct MenuBarState: Equatable {
         if let errorMessage {
             return errorMessage
         }
-        guard let session, session.isActive(at: now) else {
+        guard let session, isActive else {
             return "Espresso is off"
         }
         if session.duration.isIndefinite {
             return "On indefinitely"
         }
-        return "On: \(session.remainingLabel(at: now))"
+        return "On: \(session.remainingLabel(at: uptime))"
     }
 
     var tooltip: String {
-        guard let session, session.isActive(at: now) else {
+        guard let session, isActive else {
             return "Espresso: Off"
         }
-        if let endDate = session.endDate {
+        if let remaining = session.remainingTime(at: uptime) {
+            let endDate = now.addingTimeInterval(remaining)
             return "Espresso: On until \(Self.timeFormatter.string(from: endDate))"
         }
         return "Espresso: On indefinitely"

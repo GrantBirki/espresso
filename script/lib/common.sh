@@ -66,7 +66,7 @@ ensure_full_xcode() {
   exit 1
 }
 
-generate_xcodeproj() {
+generate_xcodeproj() (
   if [[ ! -f "$DIR/project.yml" ]]; then
     echo -e "${YELLOW}project.yml not found; nothing to update.${OFF}"
     return 0
@@ -74,22 +74,27 @@ generate_xcodeproj() {
 
   require_tool xcodegen "xcodegen not found. Run script/bootstrap."
   mkdir -p "$DIR/.tmp"
-  local lock_dir="$DIR/.tmp/xcodegen.lock"
-  local waited=0
+  lock_dir="$DIR/.tmp/xcodegen.lock"
+  waited=0
   until mkdir "$lock_dir" 2>/dev/null; do
+    if (( waited >= 150 )); then
+      echo -e "${RED}Timed out waiting for XcodeGen. Check for an active generator before removing ${lock_dir}.${OFF}" >&2
+      exit 1
+    fi
     if (( waited == 0 )); then
       echo -e "${YELLOW}Waiting for existing XcodeGen run...${OFF}"
     fi
     sleep 0.2
     waited=$((waited + 1))
   done
-  trap 'rm -rf "$lock_dir"' RETURN
+  trap 'rmdir "$lock_dir"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   echo -e "${BLUE}Generating Xcode project...${OFF}"
   (cd "$DIR" && xcodegen generate)
-  rm -rf "$lock_dir"
-  trap - RETURN
   echo -e "${GREEN}Update complete!${OFF}"
-}
+)
 
 find_project() {
   local project_path="${PROJECT_PATH:-}"

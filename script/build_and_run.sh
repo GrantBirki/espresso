@@ -3,6 +3,15 @@
 set -euo pipefail
 
 MODE="${1:-run}"
+case "$MODE" in
+  run|debug|logs|telemetry|verify) ;;
+  --debug|--logs|--telemetry|--verify) MODE="${MODE#--}" ;;
+  *)
+    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
+    exit 2
+    ;;
+esac
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${APP_NAME:-Espresso}"
 CONFIGURATION="${CONFIGURATION:-Debug}"
@@ -34,24 +43,20 @@ case "$MODE" in
   run)
     open_app
     ;;
-  --debug|debug)
+  debug)
     lldb -- "$APP_EXEC"
     ;;
-  --logs|logs)
+  logs)
     open_app
     /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\""
     ;;
-  --telemetry|telemetry)
+  telemetry)
     open_app
     /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
     ;;
-  --verify|verify)
+  verify)
     open_app
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null
-    ;;
-  *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
-    exit 2
     ;;
 esac

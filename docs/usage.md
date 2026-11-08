@@ -19,6 +19,8 @@ Espresso lives in the macOS menu bar.
 
 Espresso immediately starts a macOS power assertion. While the assertion is active, macOS should not dim the display due to idle time, and the Mac should not enter idle system sleep.
 
+The countdown measures elapsed system uptime, matching the power assertion's timeout. Changing the clock does not change the remaining duration, and time spent asleep does not count toward it.
+
 ## Replace a Session
 
 Choose another duration from the menu. Espresso stops the old assertion and starts a new one.

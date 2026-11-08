@@ -22,8 +22,20 @@ struct SettingsView: View {
                 }
 
                 GlassPanel {
-                    Toggle("Launch at login", isOn: $settings.autoLaunchEnabled)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Launch at login", isOn: Binding(
+                            get: { settings.autoLaunchEnabled },
+                            set: { settings.setAutoLaunchEnabled($0) }
+                        ))
                         .toggleStyle(.switch)
+
+                        if let message = settings.launchAtLoginMessage {
+                            Text(message)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
 
                 GlassPanel(prominence: .subtle) {
