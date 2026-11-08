@@ -22,3 +22,37 @@ jobs:
 
       - name: test
         run: script/test
+
+      - name: verify published Espresso 0.1.3
+        run: |
+          set -euo pipefail
+          verify_dir="$RUNNER_TEMP/espresso-public-release"
+          mkdir -p "$verify_dir"
+          /usr/bin/curl --fail --location --silent --show-error \
+            https://github.com/GrantBirki/espresso/releases/download/v0.1.3/Espresso.zip \
+            --output "$verify_dir/Espresso.zip"
+          printf '%s  %s\n' \
+            1931cbb3abdba4377a54dc90fcf45382ca81fadd42037095081d1959f0b098ff \
+            "$verify_dir/Espresso.zip" | /usr/bin/shasum -a 256 --check
+          /usr/bin/ditto -x -k "$verify_dir/Espresso.zip" "$verify_dir/extracted"
+          app="$verify_dir/extracted/Espresso.app"
+          /usr/bin/codesign --verify --deep --strict --verbose=4 "$app"
+          details=$(/usr/bin/codesign -d --verbose=4 "$app" 2>&1)
+          [[ "$details" == *"TeamIdentifier=674N342Y95"* ]]
+          [[ "$details" == *"Authority=Developer ID Application:"* ]]
+          [[ "$details" == *"flags="*"runtime"* ]]
+          [[ "$details" == *"Timestamp="* ]]
+          entitlements=$(/usr/bin/codesign -d --entitlements :- "$app" 2>/dev/null)
+          if [[ -n "$entitlements" ]]; then
+            [[ "$(printf '%s' "$entitlements" | /usr/bin/plutil -convert json -o - -)" == "{}" ]]
+          fi
+          plist="$app/Contents/Info.plist"
+          [[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$plist")" == io.birki.espresso ]]
+          [[ "$(/usr/bin/plutil -extract CFBundleShortVersionString raw -o - "$plist")" == 0.1.3 ]]
+          [[ "$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$plist")" == 0.1.3 ]]
+          [[ "$(/usr/bin/plutil -extract GIT_SHA raw -o - "$plist")" == df64cc1be9dacc054691417301553151220cc81f ]]
+          [[ "$(/usr/bin/lipo -archs "$app/Contents/MacOS/Espresso")" == arm64 ]]
+          /usr/bin/xcrun stapler validate "$app"
+          assessment=$(/usr/sbin/spctl --assess --type execute --verbose=4 "$app" 2>&1)
+          printf '%s\n' "$assessment"
+          [[ "$assessment" == *"source=Notarized Developer ID"* ]]
