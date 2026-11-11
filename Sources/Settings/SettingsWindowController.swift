@@ -2,10 +2,15 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let settings: SettingsStore
     private let state: SettingsWindowState
     private var hasCenteredInitialWindow = false
+    var onVisibilityChange: (() -> Void)?
+
+    var showsCountdown: Bool {
+        window?.occlusionState.contains(.visible) == true
+    }
 
     init(settings: SettingsStore, state: SettingsWindowState) {
         self.settings = settings
@@ -36,7 +41,12 @@ final class SettingsWindowController: NSWindowController {
         state.menuState = menuState
     }
 
+    func windowDidChangeOcclusionState(_: Notification) {
+        onVisibilityChange?()
+    }
+
     private func configureWindow(_ window: NSWindow) {
+        window.delegate = self
         window.title = "Espresso Settings"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false

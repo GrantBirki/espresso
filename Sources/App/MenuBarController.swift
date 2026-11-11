@@ -35,7 +35,7 @@ struct MenuBarState: Equatable {
         }
         if let remaining = session.remainingTime(at: uptime) {
             let endDate = now.addingTimeInterval(remaining)
-            return "Espresso: On until \(Self.timeFormatter.string(from: endDate))"
+            return "Espresso: On until \(endDate.formatted(date: .omitted, time: .shortened))"
         }
         return "Espresso: On indefinitely"
     }
@@ -49,13 +49,6 @@ struct MenuBarState: Equatable {
     }
 
     static let inactive = MenuBarState(session: nil, errorMessage: nil, now: Date())
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        formatter.dateStyle = .none
-        return formatter
-    }()
 }
 
 @MainActor
@@ -69,6 +62,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let aboutItem = NSMenuItem(title: "About Espresso", action: #selector(openAbout), keyEquivalent: "")
     private let quitItem = NSMenuItem(title: "Quit Espresso", action: #selector(quit), keyEquivalent: "q")
     private var state = MenuBarState.inactive
+    var onMenuVisibilityChange: ((Bool) -> Void)?
 
     private var onStart: (AwakeDuration) -> Void
     private var onStop: () -> Void
@@ -142,8 +136,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    func menuNeedsUpdate(_: NSMenu) {
-        refresh()
+    func menuWillOpen(_: NSMenu) {
+        onMenuVisibilityChange?(true)
+    }
+
+    func menuDidClose(_: NSMenu) {
+        onMenuVisibilityChange?(false)
+    }
+
+    func updateCountdown(_ title: String) {
+        if statusItemView.title != title {
+            statusItemView.title = title
+        }
     }
 
     private func refresh() {

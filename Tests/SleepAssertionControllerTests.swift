@@ -8,7 +8,7 @@ final class SleepAssertionControllerTests: XCTestCase {
     func testStartCreatesAssertionAndSession() {
         let client = FakeSleepAssertionClient()
         let uptime: TimeInterval = 1000
-        let controller = EspressoController(assertionClient: client, uptime: { uptime })
+        let controller = EspressoController(assertionClient: client, uptime: { uptime }, thermalState: { .nominal })
         defer { controller.stop() }
 
         controller.start(duration: .fifteenMinutes)
@@ -20,7 +20,7 @@ final class SleepAssertionControllerTests: XCTestCase {
 
     func testStartReleasesExistingAssertionBeforeReplacement() {
         let client = FakeSleepAssertionClient()
-        let controller = EspressoController(assertionClient: client)
+        let controller = EspressoController(assertionClient: client, thermalState: { .nominal })
         defer { controller.stop() }
 
         controller.start(duration: .fifteenMinutes)
@@ -33,7 +33,7 @@ final class SleepAssertionControllerTests: XCTestCase {
 
     func testStopReleasesAssertionAndClearsSession() {
         let client = FakeSleepAssertionClient()
-        let controller = EspressoController(assertionClient: client)
+        let controller = EspressoController(assertionClient: client, thermalState: { .nominal })
 
         controller.start(duration: .thirtyMinutes)
         controller.stop()
@@ -46,7 +46,9 @@ final class SleepAssertionControllerTests: XCTestCase {
     func testExpiryReleasesAssertion() {
         let client = FakeSleepAssertionClient()
         let startUptime: TimeInterval = 1000
-        let controller = EspressoController(assertionClient: client, uptime: { startUptime })
+        let controller = EspressoController(
+            assertionClient: client, uptime: { startUptime }, thermalState: { .nominal }
+        )
 
         controller.start(duration: .fifteenMinutes)
         controller.expireIfNeeded(at: startUptime + 900)
@@ -58,7 +60,7 @@ final class SleepAssertionControllerTests: XCTestCase {
     func testCreateFailureLeavesInactiveState() {
         let client = FakeSleepAssertionClient()
         client.nextResult = .failure(SleepAssertionError(code: -1))
-        let controller = EspressoController(assertionClient: client)
+        let controller = EspressoController(assertionClient: client, thermalState: { .nominal })
 
         controller.start(duration: .fifteenMinutes)
 
@@ -71,7 +73,9 @@ final class SleepAssertionControllerTests: XCTestCase {
     func testClockAdvanceDoesNotEndSessionEarly() {
         let client = FakeSleepAssertionClient()
         var date = Date(timeIntervalSince1970: 1_800_000_000)
-        let controller = EspressoController(assertionClient: client, now: { date }, uptime: { 1000 })
+        let controller = EspressoController(
+            assertionClient: client, now: { date }, uptime: { 1000 }, thermalState: { .nominal }
+        )
         defer { controller.stop() }
 
         controller.start(duration: .fifteenMinutes)
@@ -87,7 +91,9 @@ final class SleepAssertionControllerTests: XCTestCase {
         let client = FakeSleepAssertionClient()
         var date = Date(timeIntervalSince1970: 1_800_000_000)
         var uptime: TimeInterval = 1000
-        let controller = EspressoController(assertionClient: client, now: { date }, uptime: { uptime })
+        let controller = EspressoController(
+            assertionClient: client, now: { date }, uptime: { uptime }, thermalState: { .nominal }
+        )
         defer { controller.stop() }
 
         controller.start(duration: .fifteenMinutes)
@@ -100,10 +106,13 @@ final class SleepAssertionControllerTests: XCTestCase {
         XCTAssertEqual(controller.menuBarState().statusTitle, "Espresso is off")
     }
 
-    func testRefreshExpiresSessionDuringMenuTracking() {
+    func testExpiryTimerReleasesAssertionDuringMenuTracking() {
         let client = FakeSleepAssertionClient()
-        var uptime: TimeInterval = 1000
-        let controller = EspressoController(assertionClient: client, uptime: { uptime })
+        // Start at 1000, then schedule the deadline as if only 0.1 seconds remain.
+        var uptimes = [1000.0, 1899.9].makeIterator()
+        let controller = EspressoController(
+            assertionClient: client, uptime: { uptimes.next() ?? 1900 }, thermalState: { .nominal }
+        )
         defer { controller.stop() }
 
         // A common mode models the nested run loop used while an NSMenu is open.
@@ -127,7 +136,6 @@ final class SleepAssertionControllerTests: XCTestCase {
         defer { keepAlive.invalidate() }
 
         controller.start(duration: .fifteenMinutes)
-        uptime += 900
         while controller.session != nil, Date() < deadline {
             _ = RunLoop.main.run(mode: trackingMode, before: deadline)
         }
@@ -138,7 +146,7 @@ final class SleepAssertionControllerTests: XCTestCase {
 
     func testRepeatedStopReleasesAssertionOnce() {
         let client = FakeSleepAssertionClient()
-        let controller = EspressoController(assertionClient: client)
+        let controller = EspressoController(assertionClient: client, thermalState: { .nominal })
 
         controller.start(duration: .indefinitely)
         controller.stop()
@@ -148,10 +156,22 @@ final class SleepAssertionControllerTests: XCTestCase {
         XCTAssertNil(controller.session)
     }
 
+    func testIndefiniteSessionDoesNotPublishPeriodicUpdates() {
+        let controller = EspressoController(assertionClient: FakeSleepAssertionClient(), thermalState: { .nominal })
+        defer { controller.stop() }
+        var changes = 0
+        controller.onStateChange = { changes += 1 }
+
+        controller.start(duration: .indefinitely)
+        RunLoop.main.run(until: Date().addingTimeInterval(1.2))
+
+        XCTAssertEqual(changes, 1)
+    }
+
     func testExpiryCheckDoesNotStopReplacementSession() {
         let client = FakeSleepAssertionClient()
         var uptime: TimeInterval = 1000
-        let controller = EspressoController(assertionClient: client, uptime: { uptime })
+        let controller = EspressoController(assertionClient: client, uptime: { uptime }, thermalState: { .nominal })
         defer { controller.stop() }
 
         controller.start(duration: .fifteenMinutes)
@@ -162,6 +182,58 @@ final class SleepAssertionControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.session?.duration, .oneHour)
         XCTAssertEqual(client.releasedAssertions, [1])
+    }
+
+    func testNewAndReplacementSessionsCheckCurrentThermalState() {
+        let client = FakeSleepAssertionClient()
+        var pressure = ProcessInfo.ThermalState.critical
+        let controller = EspressoController(
+            assertionClient: client, thermalState: { pressure }, notificationCenter: NotificationCenter()
+        )
+
+        controller.start(duration: .oneHour)
+        XCTAssertTrue(client.createdDurations.isEmpty)
+        XCTAssertEqual(controller.menuBarState().statusTitle, "Off until your Mac cools down")
+
+        pressure = .fair
+        controller.start(duration: .oneHour)
+        XCTAssertEqual(controller.session?.duration, .oneHour)
+
+        pressure = .serious
+        controller.start(duration: .indefinitely)
+        XCTAssertNil(controller.session)
+        XCTAssertEqual(client.createdDurations, [.oneHour])
+        XCTAssertEqual(client.releasedAssertions, [1])
+    }
+
+    func testThermalNotificationsStopSessionsAndCoolingDoesNotRestartThem() {
+        let scenarios: [(AwakeDuration, ProcessInfo.ThermalState)] = [(.oneHour, .serious), (.indefinitely, .critical)]
+        for (duration, hotState) in scenarios {
+            let client = FakeSleepAssertionClient()
+            let center = NotificationCenter()
+            var pressure = ProcessInfo.ThermalState.nominal
+            let controller = EspressoController(
+                assertionClient: client, thermalState: { pressure }, notificationCenter: center
+            )
+            controller.start(duration: duration)
+
+            let stopped = expectation(description: "Session stops on thermal notification")
+            controller.onStateChange = { stopped.fulfill() }
+            pressure = hotState
+            center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
+            wait(for: [stopped], timeout: 2)
+            XCTAssertNil(controller.session)
+            XCTAssertEqual(client.releasedAssertions, [1])
+            XCTAssertEqual(controller.menuBarState().statusTitle, "Off until your Mac cools down")
+
+            let cooled = expectation(description: "Thermal restriction clears")
+            controller.onStateChange = { cooled.fulfill() }
+            pressure = .fair
+            center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
+            wait(for: [cooled], timeout: 2)
+            XCTAssertEqual(controller.menuBarState().statusTitle, "Espresso is off")
+            XCTAssertEqual(client.createdDurations, [duration])
+        }
     }
 }
 
