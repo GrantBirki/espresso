@@ -9,8 +9,9 @@ final class AppController {
     private let menuBarController: MenuBarController
     private let settingsWindowController: SettingsWindowController
     private let aboutWindowController = AboutWindowController()
-    private let launchAtLoginManager = LaunchAtLoginManager()
-    private var cancellables = Set<AnyCancellable>()
+    private var isMenuOpen = false
+    private let countdownTimer = CountdownTimer()
+    private var clockObservation: AnyCancellable?
 
     init(espressoController: EspressoController = EspressoController()) {
         settings = SettingsStore()
@@ -38,36 +39,89 @@ final class AppController {
         espressoController.onStateChange = { [weak self] in
             self?.updateVisibleState()
         }
+        menuBarController.onMenuVisibilityChange = { [weak self] isOpen in
+            self?.isMenuOpen = isOpen
+            self?.updateCountdownTimer()
+        }
+        settingsWindowController.onVisibilityChange = { [weak self] in
+            self?.updateCountdownTimer()
+        }
     }
 
     func start() {
         AppLog.app.info("Espresso AppController start")
         menuBarController.start()
-        observeSettings()
-        launchAtLoginManager.setEnabled(settings.autoLaunchEnabled)
+        settings.synchronizeLaunchAtLogin()
+        clockObservation = Publishers.Merge3(
+            NotificationCenter.default.publisher(for: .NSSystemClockDidChange),
+            NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange),
+            NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _ in self?.updateVisibleState() }
         updateVisibleState()
     }
 
     func stop() {
+        clockObservation = nil
         espressoController.stop()
     }
 
     func showSettings() {
+        settings.refreshLaunchAtLoginStatus()
         updateVisibleState()
         settingsWindowController.show()
-    }
-
-    private func observeSettings() {
-        settings.$autoLaunchEnabled
-            .sink { [weak self] enabled in
-                self?.launchAtLoginManager.setEnabled(enabled)
-            }
-            .store(in: &cancellables)
     }
 
     private func updateVisibleState() {
         let state = espressoController.menuBarState()
         menuBarController.update(state: state)
         settingsWindowController.update(state: state)
+        updateCountdownTimer()
+    }
+
+    private func updateCountdownTimer() {
+        countdownTimer.update(
+            session: espressoController.session,
+            menuOpen: isMenuOpen,
+            settingsVisible: settingsWindowController.showsCountdown
+        ) { [weak self] in self?.updateCountdown() }
+    }
+
+    private func updateCountdown() {
+        let state = espressoController.menuBarState()
+        if isMenuOpen {
+            menuBarController.updateCountdown(state.statusTitle)
+        }
+        if settingsWindowController.showsCountdown {
+            settingsWindowController.update(state: state)
+        }
+    }
+}
+
+@MainActor
+final class CountdownTimer {
+    private(set) var timer: Timer?
+
+    func update(
+        session: AwakeSession?,
+        menuOpen: Bool,
+        settingsVisible: Bool,
+        refresh: @escaping @MainActor () -> Void
+    ) {
+        guard session?.endUptime != nil, menuOpen || settingsVisible else {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        refresh()
+        guard timer == nil else { return }
+
+        let timer = Timer(timeInterval: 1, repeats: true) { _ in
+            MainActor.assumeIsolated { refresh() }
+        }
+        timer.tolerance = 0.1
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 }

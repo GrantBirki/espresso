@@ -4,10 +4,13 @@ import Foundation
 struct MenuBarState: Equatable {
     var session: AwakeSession?
     var errorMessage: String?
+    var needsToCoolDown = false
     var now: Date
+    var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    var isStopping = false
 
     var isActive: Bool {
-        session?.isActive(at: now) ?? false
+        session?.isActive(at: uptime) ?? false
     }
 
     var selectedDuration: AwakeDuration? {
@@ -16,44 +19,53 @@ struct MenuBarState: Equatable {
     }
 
     var statusTitle: String {
+        if isStopping {
+            return "Couldn't stop Espresso. Retrying…"
+        }
+        if needsToCoolDown {
+            return "Off until your Mac cools down"
+        }
         if let errorMessage {
             return errorMessage
         }
-        guard let session, session.isActive(at: now) else {
+        guard let session, isActive else {
             return "Espresso is off"
         }
         if session.duration.isIndefinite {
             return "On indefinitely"
         }
-        return "On: \(session.remainingLabel(at: now))"
+        return "On: \(session.remainingLabel(at: uptime))"
     }
 
     var tooltip: String {
-        guard let session, session.isActive(at: now) else {
+        if isStopping {
+            return statusTitle
+        }
+        if needsToCoolDown {
+            return "Espresso: \(statusTitle)"
+        }
+        guard let session, isActive else {
             return "Espresso: Off"
         }
-        if let endDate = session.endDate {
-            return "Espresso: On until \(Self.timeFormatter.string(from: endDate))"
+        if let remaining = session.remainingTime(at: uptime) {
+            let endDate = now.addingTimeInterval(remaining)
+            return "Espresso: On until \(endDate.formatted(date: .omitted, time: .shortened))"
         }
         return "Espresso: On indefinitely"
     }
 
     var stopItemHidden: Bool {
-        !isActive
+        !isActive && !isStopping
     }
 
     var statusSymbolName: String {
-        isActive ? "cup.and.saucer.fill" : "cup.and.saucer"
+        if isStopping {
+            return "exclamationmark.triangle"
+        }
+        return isActive ? "cup.and.saucer.fill" : "cup.and.saucer"
     }
 
     static let inactive = MenuBarState(session: nil, errorMessage: nil, now: Date())
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        formatter.dateStyle = .none
-        return formatter
-    }()
 }
 
 @MainActor
@@ -67,6 +79,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let aboutItem = NSMenuItem(title: "About Espresso", action: #selector(openAbout), keyEquivalent: "")
     private let quitItem = NSMenuItem(title: "Quit Espresso", action: #selector(quit), keyEquivalent: "q")
     private var state = MenuBarState.inactive
+    var onMenuVisibilityChange: ((Bool) -> Void)?
 
     private var onStart: (AwakeDuration) -> Void
     private var onStop: () -> Void
@@ -110,6 +123,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func start() {
+        menu.autoenablesItems = false
         statusItemView.isEnabled = false
         menu.delegate = self
         menu.addItem(statusItemView)
@@ -140,8 +154,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    func menuNeedsUpdate(_: NSMenu) {
-        refresh()
+    func menuWillOpen(_: NSMenu) {
+        onMenuVisibilityChange?(true)
+    }
+
+    func menuDidClose(_: NSMenu) {
+        onMenuVisibilityChange?(false)
+    }
+
+    func updateCountdown(_ title: String) {
+        if statusItemView.title != title {
+            statusItemView.title = title
+        }
     }
 
     private func refresh() {
@@ -149,6 +173,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         stopItem.isHidden = state.stopItemHidden
 
         for (duration, item) in durationItems {
+            item.isEnabled = !state.needsToCoolDown && !state.isStopping
             item.state = state.selectedDuration == duration ? .on : .off
         }
 

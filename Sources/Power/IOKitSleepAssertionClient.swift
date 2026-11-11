@@ -27,12 +27,18 @@ final class IOKitSleepAssertionClient: SleepAssertionClient {
         return .success(assertionID)
     }
 
-    func releaseAssertion(_ assertion: SleepAssertionIdentifier) {
+    func releaseAssertion(_ assertion: SleepAssertionIdentifier) -> Bool {
         let result = IOPMAssertionRelease(assertion)
-        if result == kIOReturnSuccess {
+        switch result {
+        case kIOReturnSuccess:
             AppLog.power.info("Power assertion released: \(assertion, privacy: .public)")
-        } else {
+            return true
+        case kIOReturnNotFound, kIOReturnBadArgument, kIOReturnNotPermitted:
+            // The ID no longer exists or belongs to another process.
+            return true
+        default:
             AppLog.power.error("Power assertion release failed: \(result, privacy: .public)")
+            return false
         }
     }
 }
