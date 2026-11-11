@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 WORKFLOW_DIR="$ROOT_DIR/.github/workflows"
 RELEASE_WORKFLOW="$WORKFLOW_DIR/release.yml"
-FENCE_SHA="e6b39c80c51cb2b2a39448ddeff74b3b886c0a63"
+FENCE_SHA="c7675fea986c29f1d655753a7a61fd6b4141be8f"
 
 fail() {
   echo "GitHub Actions policy: $1" >&2
