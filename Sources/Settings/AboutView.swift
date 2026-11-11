@@ -27,6 +27,9 @@ struct AboutView: View {
             }
             .font(.callout)
             .textSelection(.enabled)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            .background { GlassPanelBackground() }
         }
         .multilineTextAlignment(.center)
         .padding(24)

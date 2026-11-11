@@ -3,7 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var state: SettingsWindowState
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         ScrollView {
@@ -35,16 +34,7 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
-                .background {
-                    let shape = RoundedRectangle(cornerRadius: 16)
-                    if reduceTransparency {
-                        shape
-                            .fill(Color(nsColor: .controlBackgroundColor))
-                            .strokeBorder(.separator)
-                    } else {
-                        Color.clear.glassEffect(.regular, in: shape)
-                    }
-                }
+                .background { GlassPanelBackground() }
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Power behavior")
