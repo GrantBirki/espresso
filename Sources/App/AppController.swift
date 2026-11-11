@@ -10,7 +10,7 @@ final class AppController {
     private let settingsWindowController: SettingsWindowController
     private let aboutWindowController = AboutWindowController()
     private var isMenuOpen = false
-    private var countdownTimer: Timer?
+    private let countdownTimer = CountdownTimer()
     private var clockObservation: AnyCancellable?
 
     init(espressoController: EspressoController = EspressoController()) {
@@ -81,18 +81,11 @@ final class AppController {
     }
 
     private func updateCountdownTimer() {
-        countdownTimer?.invalidate()
-        countdownTimer = nil
-        guard espressoController.session?.endUptime != nil, isMenuOpen || settingsWindowController.showsCountdown else {
-            return
-        }
-        updateCountdown()
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateCountdown() }
-        }
-        timer.tolerance = 0.1
-        countdownTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
+        countdownTimer.update(
+            session: espressoController.session,
+            menuOpen: isMenuOpen,
+            settingsVisible: settingsWindowController.showsCountdown
+        ) { [weak self] in self?.updateCountdown() }
     }
 
     private func updateCountdown() {
@@ -103,5 +96,32 @@ final class AppController {
         if settingsWindowController.showsCountdown {
             settingsWindowController.update(state: state)
         }
+    }
+}
+
+@MainActor
+final class CountdownTimer {
+    private(set) var timer: Timer?
+
+    func update(
+        session: AwakeSession?,
+        menuOpen: Bool,
+        settingsVisible: Bool,
+        refresh: @escaping @MainActor () -> Void
+    ) {
+        guard session?.endUptime != nil, menuOpen || settingsVisible else {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        refresh()
+        guard timer == nil else { return }
+
+        let timer = Timer(timeInterval: 1, repeats: true) { _ in
+            MainActor.assumeIsolated { refresh() }
+        }
+        timer.tolerance = 0.1
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 }

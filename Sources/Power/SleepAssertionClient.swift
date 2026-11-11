@@ -12,5 +12,6 @@ struct SleepAssertionError: Error, Equatable {
 
 protocol SleepAssertionClient {
     func createAssertion(duration: AwakeDuration) -> Result<SleepAssertionIdentifier, SleepAssertionError>
-    func releaseAssertion(_ assertion: SleepAssertionIdentifier)
+    /// Returns true once this process no longer owns the assertion.
+    func releaseAssertion(_ assertion: SleepAssertionIdentifier) -> Bool
 }

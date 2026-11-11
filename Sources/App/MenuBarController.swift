@@ -4,8 +4,10 @@ import Foundation
 struct MenuBarState: Equatable {
     var session: AwakeSession?
     var errorMessage: String?
+    var needsToCoolDown = false
     var now: Date
     var uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    var isStopping = false
 
     var isActive: Bool {
         session?.isActive(at: uptime) ?? false
@@ -17,6 +19,12 @@ struct MenuBarState: Equatable {
     }
 
     var statusTitle: String {
+        if isStopping {
+            return "Couldn't stop Espresso. Retrying…"
+        }
+        if needsToCoolDown {
+            return "Off until your Mac cools down"
+        }
         if let errorMessage {
             return errorMessage
         }
@@ -30,6 +38,12 @@ struct MenuBarState: Equatable {
     }
 
     var tooltip: String {
+        if isStopping {
+            return statusTitle
+        }
+        if needsToCoolDown {
+            return "Espresso: \(statusTitle)"
+        }
         guard let session, isActive else {
             return "Espresso: Off"
         }
@@ -41,11 +55,14 @@ struct MenuBarState: Equatable {
     }
 
     var stopItemHidden: Bool {
-        !isActive
+        !isActive && !isStopping
     }
 
     var statusSymbolName: String {
-        isActive ? "cup.and.saucer.fill" : "cup.and.saucer"
+        if isStopping {
+            return "exclamationmark.triangle"
+        }
+        return isActive ? "cup.and.saucer.fill" : "cup.and.saucer"
     }
 
     static let inactive = MenuBarState(session: nil, errorMessage: nil, now: Date())
@@ -106,6 +123,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     func start() {
+        menu.autoenablesItems = false
         statusItemView.isEnabled = false
         menu.delegate = self
         menu.addItem(statusItemView)
@@ -155,6 +173,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         stopItem.isHidden = state.stopItemHidden
 
         for (duration, item) in durationItems {
+            item.isEnabled = !state.needsToCoolDown && !state.isStopping
             item.state = state.selectedDuration == duration ? .on : .off
         }
 

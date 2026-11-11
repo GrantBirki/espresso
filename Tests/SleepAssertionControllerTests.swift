@@ -1,6 +1,7 @@
 import CoreFoundation
 @testable import Espresso
 import Foundation
+import os
 import XCTest
 
 @MainActor
@@ -41,6 +42,28 @@ final class SleepAssertionControllerTests: XCTestCase {
         XCTAssertEqual(client.releasedAssertions, [1])
         XCTAssertNil(controller.session)
         XCTAssertNil(controller.lastError)
+    }
+
+    func testFailedReleaseBlocksReplacementAndRetriesTheSameAssertion() {
+        let client = FakeSleepAssertionClient()
+        let controller = EspressoController(assertionClient: client, thermalState: { .nominal })
+        controller.start(duration: .indefinitely)
+
+        client.releaseSucceeds = false
+        controller.start(duration: .oneHour)
+        let pending = controller.menuBarState()
+        XCTAssertTrue(pending.isStopping)
+        XCTAssertFalse(pending.stopItemHidden)
+        XCTAssertEqual(pending.tooltip, pending.statusTitle)
+        XCTAssertEqual(client.createdDurations, [.indefinitely])
+        XCTAssertEqual(client.releasedAssertions, [1])
+
+        client.releaseSucceeds = true
+        let stopped = expectation(description: "The retained assertion is released on retry")
+        controller.onStateChange = { stopped.fulfill() }
+        wait(for: [stopped], timeout: 9)
+        XCTAssertEqual(client.releasedAssertions, [1, 1])
+        XCTAssertEqual(controller.menuBarState().statusTitle, "Espresso is off")
     }
 
     func testExpiryReleasesAssertion() {
@@ -186,24 +209,56 @@ final class SleepAssertionControllerTests: XCTestCase {
 
     func testNewAndReplacementSessionsCheckCurrentThermalState() {
         let client = FakeSleepAssertionClient()
-        var pressure = ProcessInfo.ThermalState.critical
+        let pressure = OSAllocatedUnfairLock(initialState: ProcessInfo.ThermalState.critical)
         let controller = EspressoController(
-            assertionClient: client, thermalState: { pressure }, notificationCenter: NotificationCenter()
+            assertionClient: client,
+            thermalState: { pressure.withLock { $0 } },
+            notificationCenter: NotificationCenter()
         )
 
         controller.start(duration: .oneHour)
+        XCTAssertTrue(controller.menuBarState().needsToCoolDown)
+        XCTAssertEqual(controller.menuBarState().tooltip, "Espresso: Off until your Mac cools down")
         XCTAssertTrue(client.createdDurations.isEmpty)
         XCTAssertEqual(controller.menuBarState().statusTitle, "Off until your Mac cools down")
 
-        pressure = .fair
+        pressure.withLock { $0 = .fair }
         controller.start(duration: .oneHour)
         XCTAssertEqual(controller.session?.duration, .oneHour)
 
-        pressure = .serious
+        pressure.withLock { $0 = .serious }
         controller.start(duration: .indefinitely)
         XCTAssertNil(controller.session)
         XCTAssertEqual(client.createdDurations, [.oneHour])
         XCTAssertEqual(client.releasedAssertions, [1])
+    }
+
+    func testBriefThermalSpikeStopsOnlyTheSessionThatWasRunning() {
+        for restartAfterCooling in [false, true] {
+            let client = FakeSleepAssertionClient()
+            let center = NotificationCenter()
+            let pressure = OSAllocatedUnfairLock(initialState: ProcessInfo.ThermalState.nominal)
+            let controller = EspressoController(
+                assertionClient: client, thermalState: { pressure.withLock { $0 } }, notificationCenter: center
+            )
+            controller.start(duration: .indefinitely)
+            defer { controller.stop() }
+
+            pressure.withLock { $0 = .critical }
+            center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
+            pressure.withLock { $0 = .fair }
+            center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
+            if restartAfterCooling {
+                controller.start(duration: .oneHour)
+            }
+            let drained = expectation(description: "Queued thermal notifications handled")
+            RunLoop.main.perform(inModes: [.common]) { drained.fulfill() }
+            wait(for: [drained], timeout: 2)
+
+            XCTAssertEqual(client.releasedAssertions, [1])
+            XCTAssertEqual(controller.session?.duration, restartAfterCooling ? .oneHour : nil)
+            XCTAssertFalse(controller.menuBarState().needsToCoolDown)
+        }
     }
 
     func testThermalNotificationsStopSessionsAndCoolingDoesNotRestartThem() {
@@ -211,15 +266,15 @@ final class SleepAssertionControllerTests: XCTestCase {
         for (duration, hotState) in scenarios {
             let client = FakeSleepAssertionClient()
             let center = NotificationCenter()
-            var pressure = ProcessInfo.ThermalState.nominal
+            let pressure = OSAllocatedUnfairLock(initialState: ProcessInfo.ThermalState.nominal)
             let controller = EspressoController(
-                assertionClient: client, thermalState: { pressure }, notificationCenter: center
+                assertionClient: client, thermalState: { pressure.withLock { $0 } }, notificationCenter: center
             )
             controller.start(duration: duration)
 
             let stopped = expectation(description: "Session stops on thermal notification")
             controller.onStateChange = { stopped.fulfill() }
-            pressure = hotState
+            pressure.withLock { $0 = hotState }
             center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
             wait(for: [stopped], timeout: 2)
             XCTAssertNil(controller.session)
@@ -228,7 +283,7 @@ final class SleepAssertionControllerTests: XCTestCase {
 
             let cooled = expectation(description: "Thermal restriction clears")
             controller.onStateChange = { cooled.fulfill() }
-            pressure = .fair
+            pressure.withLock { $0 = .fair }
             center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
             wait(for: [cooled], timeout: 2)
             XCTAssertEqual(controller.menuBarState().statusTitle, "Espresso is off")
@@ -239,6 +294,7 @@ final class SleepAssertionControllerTests: XCTestCase {
 
 private final class FakeSleepAssertionClient: SleepAssertionClient {
     var nextResult: Result<SleepAssertionIdentifier, SleepAssertionError>?
+    var releaseSucceeds = true
     private var nextAssertion: SleepAssertionIdentifier = 1
     private(set) var createdDurations: [AwakeDuration] = []
     private(set) var releasedAssertions: [SleepAssertionIdentifier] = []
@@ -254,7 +310,8 @@ private final class FakeSleepAssertionClient: SleepAssertionClient {
         return .success(nextAssertion)
     }
 
-    func releaseAssertion(_ assertion: SleepAssertionIdentifier) {
+    func releaseAssertion(_ assertion: SleepAssertionIdentifier) -> Bool {
         releasedAssertions.append(assertion)
+        return releaseSucceeds
     }
 }
