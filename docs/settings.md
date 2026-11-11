@@ -15,3 +15,7 @@ Active awake sessions are not restored after quitting or relaunching Espresso. T
 ## Power Behavior
 
 Espresso uses `kIOPMAssertionTypePreventUserIdleDisplaySleep`, which prevents the display from dimming due to idle time. That also prevents idle system sleep while the assertion is active.
+
+Thermal protection is always on. When macOS reports serious or critical thermal pressure, Espresso releases its power assertion and blocks new sessions. Once the Mac cools down, you can choose a duration to start again.
+
+If macOS fails to release an assertion, Espresso shows a retry message and keeps trying to release it before starting another session. You can also choose `Stop Espresso` to retry immediately.
