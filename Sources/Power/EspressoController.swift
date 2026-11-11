@@ -8,7 +8,9 @@ final class EspressoController {
     private let now: () -> Date
     private let uptime: () -> TimeInterval
     private let thermalState: @Sendable () -> ProcessInfo.ThermalState
-    private let pendingHotState = OSAllocatedUnfairLock(initialState: false)
+    private let pendingHeat = OSAllocatedUnfairLock<ThermalPressure?>(initialState: nil)
+    private let recordThermalStop: (ThermalStopEvent) -> Void
+    private var thermalReleasePending: ThermalPressure?
     private var thermalObservation: AnyCancellable?
     private var needsToCoolDown = false
     private var assertionID: SleepAssertionIdentifier?
@@ -23,24 +25,24 @@ final class EspressoController {
         now: @escaping () -> Date = Date.init,
         uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         thermalState: @escaping @Sendable () -> ProcessInfo.ThermalState = { ProcessInfo.processInfo.thermalState },
-        notificationCenter: NotificationCenter = .default
+        notificationCenter: NotificationCenter = .default,
+        recordThermalStop: @escaping (ThermalStopEvent) -> Void = { $0.log() }
     ) {
         self.assertionClient = assertionClient
         self.now = now
         self.uptime = uptime
         self.thermalState = thermalState
+        self.recordThermalStop = recordThermalStop
 
         // Foundation requires a thermal-state read before notification registration.
-        needsToCoolDown = Self.requiresCooling(thermalState())
+        needsToCoolDown = ThermalPressure(thermalState()) != nil
         thermalObservation = notificationCenter.publisher(
             for: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo
         )
-        .sink { @Sendable [weak self, pendingHotState] _ in
+        .sink { @Sendable [weak self, pendingHeat] _ in
             // A hot interval can end before the main run loop handles this notification.
-            pendingHotState.withLock { pending in
-                if Self.requiresCooling(thermalState()) {
-                    pending = true
-                }
+            pendingHeat.withLock { pending in
+                pending = ThermalPressure.peak(pending, ThermalPressure(thermalState()))
             }
             RunLoop.main.perform(inModes: [.common]) { [weak self] in
                 MainActor.assumeIsolated { self?.thermalStateDidChange() }
@@ -51,16 +53,13 @@ final class EspressoController {
     }
 
     func start(duration: AwakeDuration) {
-        // A new selection after cooling supersedes notifications from the previous session.
-        needsToCoolDown = pendingHotState.withLock { pending in
-            pending = false
-            return Self.requiresCooling(thermalState())
-        }
+        let heat = consumeThermalReading()
+        needsToCoolDown = heat.current != nil
         guard !needsToCoolDown else {
-            stop()
+            stop(for: heat.peak)
             return
         }
-        guard releaseCurrentAssertion() else {
+        guard releaseCurrentAssertion(for: heat.peak) else {
             onStateChange?()
             return
         }
@@ -82,8 +81,8 @@ final class EspressoController {
         onStateChange?()
     }
 
-    func stop() {
-        _ = releaseCurrentAssertion()
+    func stop(for pressure: ThermalPressure? = nil) {
+        _ = releaseCurrentAssertion(for: pressure)
         lastError = nil
         onStateChange?()
     }
@@ -113,37 +112,43 @@ final class EspressoController {
         )
     }
 
-    private nonisolated static func requiresCooling(_ state: ProcessInfo.ThermalState) -> Bool {
-        switch state {
-        case .nominal, .fair: false
-        case .serious, .critical: true
-        @unknown default: true
+    private func consumeThermalReading() -> (current: ThermalPressure?, peak: ThermalPressure?) {
+        pendingHeat.withLock { pending in
+            let current = ThermalPressure(thermalState())
+            defer { pending = nil }
+            return (current, ThermalPressure.peak(pending, current))
         }
     }
 
     private func thermalStateDidChange() {
-        let (wasHot, isHot) = pendingHotState.withLock { pending in
-            defer { pending = false }
-            return (pending, Self.requiresCooling(thermalState()))
-        }
-        let availabilityChanged = needsToCoolDown != isHot
-        needsToCoolDown = isHot
-        if session != nil, wasHot || isHot {
-            stop()
+        let heat = consumeThermalReading()
+        let availabilityChanged = needsToCoolDown != (heat.current != nil)
+        needsToCoolDown = heat.current != nil
+        if session != nil, let pressure = heat.peak {
+            stop(for: pressure)
         } else if availabilityChanged {
             onStateChange?()
         }
     }
 
-    private func releaseCurrentAssertion() -> Bool {
+    private func releaseCurrentAssertion(for pressure: ThermalPressure?) -> Bool {
         cancelAssertionTimer()
+        let newThermalStop = session == nil ? nil : pressure
         session = nil
         guard let assertionID else { return true }
         if assertionClient.releaseAssertion(assertionID) {
             self.assertionID = nil
+            if let reason = thermalReleasePending ?? newThermalStop {
+                thermalReleasePending = nil
+                recordThermalStop(.stopped(reason))
+            }
             return true
         }
 
+        if let reason = newThermalStop {
+            thermalReleasePending = reason
+            recordThermalStop(.releasePending(reason))
+        }
         let retry = Timer(timeInterval: 5, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.stop() }
         }

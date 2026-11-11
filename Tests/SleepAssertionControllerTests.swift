@@ -34,7 +34,10 @@ final class SleepAssertionControllerTests: XCTestCase {
 
     func testStopReleasesAssertionAndClearsSession() {
         let client = FakeSleepAssertionClient()
-        let controller = EspressoController(assertionClient: client, thermalState: { .nominal })
+        let controller = EspressoController(
+            assertionClient: client, thermalState: { .nominal },
+            recordThermalStop: { XCTFail("Manual stop recorded a thermal event: \($0)") }
+        )
 
         controller.start(duration: .thirtyMinutes)
         controller.stop()
@@ -70,7 +73,8 @@ final class SleepAssertionControllerTests: XCTestCase {
         let client = FakeSleepAssertionClient()
         let startUptime: TimeInterval = 1000
         let controller = EspressoController(
-            assertionClient: client, uptime: { startUptime }, thermalState: { .nominal }
+            assertionClient: client, uptime: { startUptime }, thermalState: { .nominal },
+            recordThermalStop: { XCTFail("Expiry recorded a thermal event: \($0)") }
         )
 
         controller.start(duration: .fifteenMinutes)
@@ -206,20 +210,25 @@ final class SleepAssertionControllerTests: XCTestCase {
         XCTAssertEqual(controller.session?.duration, .oneHour)
         XCTAssertEqual(client.releasedAssertions, [1])
     }
+}
 
+extension SleepAssertionControllerTests {
     func testNewAndReplacementSessionsCheckCurrentThermalState() {
         let client = FakeSleepAssertionClient()
         let pressure = OSAllocatedUnfairLock(initialState: ProcessInfo.ThermalState.critical)
+        var events: [ThermalStopEvent] = []
         let controller = EspressoController(
             assertionClient: client,
             thermalState: { pressure.withLock { $0 } },
-            notificationCenter: NotificationCenter()
+            notificationCenter: NotificationCenter(),
+            recordThermalStop: { events.append($0) }
         )
 
         controller.start(duration: .oneHour)
         XCTAssertTrue(controller.menuBarState().needsToCoolDown)
         XCTAssertEqual(controller.menuBarState().tooltip, "Espresso: Off until your Mac cools down")
         XCTAssertTrue(client.createdDurations.isEmpty)
+        XCTAssertTrue(events.isEmpty)
         XCTAssertEqual(controller.menuBarState().statusTitle, "Off until your Mac cools down")
 
         pressure.withLock { $0 = .fair }
@@ -231,6 +240,7 @@ final class SleepAssertionControllerTests: XCTestCase {
         XCTAssertNil(controller.session)
         XCTAssertEqual(client.createdDurations, [.oneHour])
         XCTAssertEqual(client.releasedAssertions, [1])
+        XCTAssertEqual(events, [.stopped(.serious)])
     }
 
     func testBriefThermalSpikeStopsOnlyTheSessionThatWasRunning() {
@@ -238,16 +248,18 @@ final class SleepAssertionControllerTests: XCTestCase {
             let client = FakeSleepAssertionClient()
             let center = NotificationCenter()
             let pressure = OSAllocatedUnfairLock(initialState: ProcessInfo.ThermalState.nominal)
+            var events: [ThermalStopEvent] = []
             let controller = EspressoController(
-                assertionClient: client, thermalState: { pressure.withLock { $0 } }, notificationCenter: center
+                assertionClient: client, thermalState: { pressure.withLock { $0 } },
+                notificationCenter: center, recordThermalStop: { events.append($0) }
             )
             controller.start(duration: .indefinitely)
             defer { controller.stop() }
 
-            pressure.withLock { $0 = .critical }
-            center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
-            pressure.withLock { $0 = .fair }
-            center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
+            for state in [ProcessInfo.ThermalState.critical, .serious, .fair] {
+                pressure.withLock { $0 = state }
+                center.post(name: ProcessInfo.thermalStateDidChangeNotification, object: ProcessInfo.processInfo)
+            }
             if restartAfterCooling {
                 controller.start(duration: .oneHour)
             }
@@ -258,6 +270,7 @@ final class SleepAssertionControllerTests: XCTestCase {
             XCTAssertEqual(client.releasedAssertions, [1])
             XCTAssertEqual(controller.session?.duration, restartAfterCooling ? .oneHour : nil)
             XCTAssertFalse(controller.menuBarState().needsToCoolDown)
+            XCTAssertEqual(events, [.stopped(.critical)])
         }
     }
 
@@ -267,8 +280,10 @@ final class SleepAssertionControllerTests: XCTestCase {
             let client = FakeSleepAssertionClient()
             let center = NotificationCenter()
             let pressure = OSAllocatedUnfairLock(initialState: ProcessInfo.ThermalState.nominal)
+            var events: [ThermalStopEvent] = []
             let controller = EspressoController(
-                assertionClient: client, thermalState: { pressure.withLock { $0 } }, notificationCenter: center
+                assertionClient: client, thermalState: { pressure.withLock { $0 } },
+                notificationCenter: center, recordThermalStop: { events.append($0) }
             )
             controller.start(duration: duration)
 
@@ -288,7 +303,31 @@ final class SleepAssertionControllerTests: XCTestCase {
             wait(for: [cooled], timeout: 2)
             XCTAssertEqual(controller.menuBarState().statusTitle, "Espresso is off")
             XCTAssertEqual(client.createdDurations, [duration])
+            XCTAssertEqual(events, [hotState == .critical ? .stopped(.critical) : .stopped(.serious)])
         }
+    }
+
+    func testThermalStopRecordsOnePendingReleaseAndOneConfirmation() {
+        let client = FakeSleepAssertionClient()
+        let pressure = OSAllocatedUnfairLock(initialState: ProcessInfo.ThermalState.nominal)
+        var events: [ThermalStopEvent] = []
+        let controller = EspressoController(
+            assertionClient: client, thermalState: { pressure.withLock { $0 } },
+            notificationCenter: NotificationCenter(), recordThermalStop: { events.append($0) }
+        )
+        controller.start(duration: .indefinitely)
+        client.releaseSucceeds = false
+        pressure.withLock { $0 = .critical }
+        controller.start(duration: .oneHour)
+        controller.stop()
+        XCTAssertEqual(events, [.releasePending(.critical)])
+
+        pressure.withLock { $0 = .fair }
+        client.releaseSucceeds = true
+        controller.start(duration: .oneHour)
+        controller.stop()
+        XCTAssertEqual(events, [.releasePending(.critical), .stopped(.critical)])
+        XCTAssertEqual(client.releasedAssertions, [1, 1, 1, 2])
     }
 }
 
