@@ -5,50 +5,58 @@ struct SettingsView: View {
     @ObservedObject var state: SettingsWindowState
 
     var body: some View {
-        GlassEffectContainer(spacing: 18) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 14) {
-                    Image(systemName: state.menuState.statusSymbolName)
-                        .font(.system(size: 34, weight: .semibold))
-                        .frame(width: 60, height: 60)
-                        .glassEffect(.regular.interactive(false), in: .rect(cornerRadius: 18))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Espresso")
+                        .font(.largeTitle.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Label(state.menuState.statusTitle, systemImage: state.menuState.statusSymbolName)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Espresso")
-                            .font(.title2.bold())
-                        Text(state.menuState.statusTitle)
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: Binding(
+                        get: { settings.autoLaunchEnabled },
+                        set: { settings.setAutoLaunchEnabled($0) }
+                    )) {
+                        Text("Launch at login")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .toggleStyle(.switch)
+
+                    if let message = settings.launchAtLoginMessage {
+                        Text(message)
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background { GlassPanelBackground() }
 
-                GlassPanel {
-                    Toggle("Launch at login", isOn: $settings.autoLaunchEnabled)
-                        .toggleStyle(.switch)
-                }
-
-                GlassPanel(prominence: .subtle) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Power behavior")
-                            .font(.headline)
-                        Text(
-                            "Espresso keeps the display awake, which also prevents idle system sleep. "
-                                + "Manual sleep, lid close, low battery, and thermal events can still sleep the Mac."
-                        )
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                Spacer()
-
-                Text("Version \(BuildInfo.version) (\(BuildInfo.gitSHA))")
-                    .font(.footnote)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Power behavior")
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(
+                        "Espresso keeps the display awake, which also prevents idle system sleep. "
+                            + "Manual sleep, lid close, low battery, and thermal events can still sleep the Mac."
+                    )
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
             .padding(24)
-            .frame(width: 560, height: 360)
         }
+        .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
+            Text("Version \(BuildInfo.version) (\(BuildInfo.gitSHA))")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
+        }
+        .frame(width: 560, height: 360)
     }
 }

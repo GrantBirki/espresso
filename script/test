@@ -5,6 +5,8 @@ set -euo pipefail
 source script/env "$@"
 source "$DIR/script/lib/common.sh"
 
+"$DIR/script/test-scripts"
+
 require_macos error "Tests require macOS."
 ensure_full_xcode
 require_tool xcodebuild "xcodebuild not found. Install Xcode or Command Line Tools."

@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/espresso-script-tests.XXXXXX")
+owner_pid=""
+waiter_pid=""
+cleanup() {
+  touch "$TEST_DIR/release"
+  local child_pid
+  for child_pid in "$owner_pid" "$waiter_pid"; do
+    if [[ -n "$child_pid" ]]; then
+      kill "$child_pid" 2>/dev/null || true
+      wait "$child_pid" 2>/dev/null || true
+    fi
+  done
+  rm -rf "$TEST_DIR"
+}
+trap cleanup EXIT
+
+fail() {
+  echo "Script regression failed: $1" >&2
+  if [[ -f "$TEST_DIR/output" ]]; then
+    cat "$TEST_DIR/output" >&2
+  fi
+  exit 1
+}
+
+mkdir -p "$TEST_DIR/bin" "$TEST_DIR/project"
+touch "$TEST_DIR/project/project.yml"
+export XCODEGEN_CALLS="$TEST_DIR/calls"
+cat > "$TEST_DIR/bin/xcodegen" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+echo generated >> "$XCODEGEN_CALLS"
+if [[ -n "${XCODEGEN_READY:-}" ]]; then
+  touch "$XCODEGEN_READY"
+  until [[ -e "$XCODEGEN_RELEASE" ]]; do
+    sleep 0.05
+  done
+fi
+exit "${XCODEGEN_STATUS:-0}"
+BASH
+chmod +x "$TEST_DIR/bin/xcodegen"
+export PATH="$TEST_DIR/bin:$PATH"
+
+generate() {
+  /bin/bash -c '
+    set -euo pipefail
+    source "$1/script/env"
+    source "$1/script/lib/common.sh"
+    DIR="$2"
+    if [[ "${FAST_WAIT:-}" == "1" ]]; then
+      sleep() { :; }
+    elif [[ -n "${WAIT_MARKER:-}" ]]; then
+      sleep() { touch "$WAIT_MARKER"; command sleep "$@"; }
+    fi
+    if [[ -n "${CALLER_EXIT_MARKER:-}" ]]; then
+      trap '\''touch "$CALLER_EXIT_MARKER"'\'' EXIT
+    fi
+    generate_xcodeproj
+  ' bash "$ROOT_DIR" "$TEST_DIR/project" > "$TEST_DIR/output" 2>&1
+}
+
+wait_for_file() {
+  local attempt
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ ! -e "$1" ]] || return 0
+    sleep 0.05
+  done
+  fail "timed out waiting for $2"
+}
+
+# Failed generation must release its lock without replacing the caller's trap.
+status=0
+XCODEGEN_STATUS=42 CALLER_EXIT_MARKER="$TEST_DIR/caller-exit" generate || status=$?
+[[ "$status" == "42" ]] || fail "XcodeGen's failure status was lost"
+[[ -e "$TEST_DIR/caller-exit" ]] || fail "the caller's EXIT trap was lost"
+[[ ! -e "$TEST_DIR/project/.tmp/xcodegen.lock" ]] || fail "failed generation left a lock"
+
+generate
+generate
+[[ $(wc -l < "$XCODEGEN_CALLS" | tr -d ' ') == "3" ]] || fail "repeated generation did not run"
+[[ ! -e "$TEST_DIR/project/.tmp/xcodegen.lock" ]] || fail "successful generation left a lock"
+
+# A second caller must wait for the owner, then generate after it releases.
+XCODEGEN_READY="$TEST_DIR/ready" XCODEGEN_RELEASE="$TEST_DIR/release" generate &
+owner_pid=$!
+wait_for_file "$TEST_DIR/ready" "the lock owner"
+WAIT_MARKER="$TEST_DIR/waiting" generate &
+waiter_pid=$!
+wait_for_file "$TEST_DIR/waiting" "lock contention"
+[[ $(wc -l < "$XCODEGEN_CALLS" | tr -d ' ') == "4" ]] || fail "concurrent generators bypassed the lock"
+touch "$TEST_DIR/release"
+wait "$owner_pid"
+owner_pid=""
+wait "$waiter_pid"
+waiter_pid=""
+[[ $(wc -l < "$XCODEGEN_CALLS" | tr -d ' ') == "5" ]] || fail "the waiting generator did not run"
+[[ ! -e "$TEST_DIR/project/.tmp/xcodegen.lock" ]] || fail "concurrent generation left a lock"
+
+# A stale lock must produce a bounded failure and remain owned by its creator.
+mkdir "$TEST_DIR/project/.tmp/xcodegen.lock"
+status=0
+FAST_WAIT=1 generate || status=$?
+[[ "$status" != "0" ]] || fail "a held lock unexpectedly succeeded"
+[[ -d "$TEST_DIR/project/.tmp/xcodegen.lock" ]] || fail "a waiting caller removed someone else's lock"
+[[ $(wc -l < "$XCODEGEN_CALLS" | tr -d ' ') == "5" ]] || fail "timed-out generation ran XcodeGen"
+
+# Invalid launch modes must fail before quitting an app or starting a build.
+mkdir -p "$TEST_DIR/launcher/script"
+cp "$ROOT_DIR/script/build_and_run.sh" "$TEST_DIR/launcher/script/build_and_run.sh"
+export SCRIPT_ACTIONS="$TEST_DIR/script-actions"
+cat > "$TEST_DIR/launcher/script/build" <<'BASH'
+#!/usr/bin/env bash
+echo build >> "$SCRIPT_ACTIONS"
+BASH
+chmod +x "$TEST_DIR/launcher/script/build"
+for tool in pgrep osascript pkill lldb; do
+  cat > "$TEST_DIR/bin/$tool" <<'BASH'
+#!/usr/bin/env bash
+echo "${0##*/}" >> "$SCRIPT_ACTIONS"
+BASH
+  chmod +x "$TEST_DIR/bin/$tool"
+done
+status=0
+"$TEST_DIR/launcher/script/build_and_run.sh" --unknown > "$TEST_DIR/output" 2>&1 || status=$?
+[[ "$status" == "2" ]] || fail "an invalid launch mode did not return a usage error"
+[[ ! -e "$SCRIPT_ACTIONS" ]] || fail "an invalid launch mode quit an app or started a build"
+
+for mode in debug --debug; do
+  : > "$SCRIPT_ACTIONS"
+  "$TEST_DIR/launcher/script/build_and_run.sh" "$mode" > "$TEST_DIR/output" 2>&1
+  grep -qx build "$SCRIPT_ACTIONS" || fail "a valid debug mode skipped the build"
+  [[ $(tail -n 1 "$SCRIPT_ACTIONS") == "lldb" ]] || fail "a valid debug mode did not launch the debugger"
+done
+
+echo "Script regressions: OK"
