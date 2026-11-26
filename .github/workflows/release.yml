@@ -115,7 +115,7 @@ jobs:
 
     steps:
       - name: download unnotarized artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # pin@v8.0.2
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: "input/"
@@ -426,7 +426,7 @@ jobs:
             rekor.sigstore.dev
 
       - name: download artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # pin@v8.0.2
         with:
           artifact-ids: ${{ needs.sign.outputs.artifact-id }}
           path: "dist/"
@@ -462,13 +462,13 @@ jobs:
             tuf-repo.github.com
 
       - name: download artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # pin@v8.0.2
         with:
           artifact-ids: ${{ needs.sign.outputs.artifact-id }}
           path: "dist/"
 
       - name: download attestation bundle
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # pin@v8.0.2
         with:
           artifact-ids: ${{ needs.attest.outputs.bundle_artifact_id }}
           path: "dist/attestation/"
@@ -526,7 +526,7 @@ jobs:
             uploads.github.com
 
       - name: download artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # pin@v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # pin@v8.0.2
         with:
           artifact-ids: ${{ needs.sign.outputs.artifact-id }}
           path: "dist/"
